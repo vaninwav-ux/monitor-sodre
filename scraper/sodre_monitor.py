@@ -6,7 +6,8 @@ SODRÉ SANTORO - SCRIPT DE MONITORAMENTO
 ✅ Match com links da tabela base
 ✅ Detecta mudanças (lances, visitas, status)
 ✅ Insere snapshots na tabela de monitoramento
-✅ Atualiza tabela base com dados frescos
+✅ Atualiza tabela base com dados frescos (todos os campos possíveis)
+✅ Usa _safe_str() para evitar AttributeError
 """
 
 import os
@@ -255,8 +256,8 @@ class SodreMonitor:
                 if snapshot['status_changed']:
                     self.stats['status_changes'] += 1
             
-            # Prepara update da tabela base
-            update = self._create_update(db_item, scraped_lot)
+            # Prepara update da tabela base (TODOS OS CAMPOS)
+            update = self._create_full_update(db_item, scraped_lot)
             if update:
                 updates_batch.append(update)
         
@@ -280,8 +281,8 @@ class SodreMonitor:
             bid_actual = self._parse_numeric(scraped_lot.get('bid_actual'))
             has_bid = bool(scraped_lot.get('bid_has_bid', False))
             lot_visits = self._parse_int(scraped_lot.get('lot_visits')) or 0
-            lot_status = scraped_lot.get('lot_status')
-            auction_status = scraped_lot.get('auction_status')
+            lot_status = self._safe_str(scraped_lot.get('lot_status'))
+            auction_status = self._safe_str(scraped_lot.get('auction_status'))
             
             # Datas do leilão
             auction_date_init = self._parse_datetime(scraped_lot.get('auction_date_init'))
@@ -421,9 +422,9 @@ class SodreMonitor:
                 'lot_category': db_item.get('lot_category'),
                 'city': db_item.get('city'),
                 'state': db_item.get('state'),
-                'client_name': scraped_lot.get('client_name'),
-                'lot_origin': scraped_lot.get('lot_origin'),
-                'lot_sinister': scraped_lot.get('lot_sinister'),
+                'client_name': self._safe_str(scraped_lot.get('client_name')),
+                'lot_origin': self._safe_str(scraped_lot.get('lot_origin')),
+                'lot_sinister': self._safe_str(scraped_lot.get('lot_sinister')),
                 
                 # Métricas de tempo
                 'hours_since_last_snapshot': hours_since_last,
@@ -447,26 +448,135 @@ class SodreMonitor:
             print(f"⚠️ Erro ao criar snapshot: {e}")
             return None
     
-    def _create_update(self, db_item: Dict, scraped_lot: Dict) -> Optional[Dict]:
-        """Cria update para tabela base"""
+    def _create_full_update(self, db_item: Dict, scraped_lot: Dict) -> Optional[Dict]:
+        """
+        Cria update COMPLETO para tabela base
+        ✅ Atualiza TODOS os campos possíveis, não só os básicos
+        ✅ Usa _safe_str() como o scraper
+        """
         try:
+            now = datetime.now(timezone.utc).isoformat()
+            
+            # Datas
+            auction_date_init = self._parse_datetime(scraped_lot.get('auction_date_init'))
+            auction_date_2 = self._parse_datetime(scraped_lot.get('auction_date_2'))
+            auction_date_end = self._parse_datetime(scraped_lot.get('auction_date_end'))
+            
+            # Imagem
+            image_url = None
+            lot_pictures = scraped_lot.get('lot_pictures')
+            if lot_pictures:
+                if isinstance(lot_pictures, list) and len(lot_pictures) > 0:
+                    image_url = lot_pictures[0]
+                elif isinstance(lot_pictures, str):
+                    image_url = lot_pictures
+            
+            # Optionals
+            lot_optionals = scraped_lot.get('lot_optionals')
+            if lot_optionals:
+                if isinstance(lot_optionals, list):
+                    lot_optionals = [str(opt) for opt in lot_optionals if opt]
+                elif isinstance(lot_optionals, str):
+                    lot_optionals = [lot_optionals]
+                else:
+                    lot_optionals = None
+            else:
+                lot_optionals = None
+            
+            # Metadata
+            metadata = {
+                'segment_base': scraped_lot.get('segment_base'),
+                'lot_pictures': lot_pictures if lot_pictures else None,
+                'search_terms': scraped_lot.get('search_terms'),
+            }
+            
             update = {
                 'id': db_item['id'],
+                
+                # Básicos que sempre podem mudar
                 'bid_initial': self._parse_numeric(scraped_lot.get('bid_initial')),
                 'bid_actual': self._parse_numeric(scraped_lot.get('bid_actual')),
+                'bid_has_bid': bool(scraped_lot.get('bid_has_bid', False)),
                 'has_bid': bool(scraped_lot.get('bid_has_bid', False)),
                 'lot_visits': self._parse_int(scraped_lot.get('lot_visits')),
-                'lot_status': scraped_lot.get('lot_status'),
-                'auction_status': scraped_lot.get('auction_status'),
+                'lot_status': self._safe_str(scraped_lot.get('lot_status')),
+                'auction_status': self._safe_str(scraped_lot.get('auction_status')),
                 'is_active': scraped_lot.get('auction_status') == 'aberto',
-                'updated_at': datetime.now(timezone.utc).isoformat(),
-                'last_scraped_at': datetime.now(timezone.utc).isoformat(),
+                
+                # Informações do leilão
+                'auction_name': self._safe_str(scraped_lot.get('auction_name')),
+                'auction_date_init': auction_date_init,
+                'auction_date_2': auction_date_2,
+                'auction_date_end': auction_date_end,
+                'auctioneer_name': self._safe_str(scraped_lot.get('auctioneer_name')),
+                
+                # Cliente
+                'client_id': self._parse_int(scraped_lot.get('client_id')),
+                'client_name': self._safe_str(scraped_lot.get('client_name')),
+                
+                # Lance
+                'bid_user_nickname': self._safe_str(scraped_lot.get('bid_user_nickname')),
+                
+                # Detalhes do lote - Veículos
+                'lot_brand': self._safe_str(scraped_lot.get('lot_brand')),
+                'lot_model': self._safe_str(scraped_lot.get('lot_model')),
+                'lot_year_manufacture': self._parse_int(scraped_lot.get('lot_year_manufacture')),
+                'lot_year_model': self._parse_int(scraped_lot.get('lot_year_model')),
+                'lot_plate': self._safe_str(scraped_lot.get('lot_plate')),
+                'lot_color': self._safe_str(scraped_lot.get('lot_color')),
+                'lot_km': self._parse_int(scraped_lot.get('lot_km')),
+                'lot_fuel': self._safe_str(scraped_lot.get('lot_fuel')),
+                'lot_transmission': self._safe_str(scraped_lot.get('lot_transmission')),
+                'lot_sinister': self._safe_str(scraped_lot.get('lot_sinister')),
+                'lot_origin': self._safe_str(scraped_lot.get('lot_origin')),
+                'lot_optionals': lot_optionals,
+                'lot_tags': self._safe_str(scraped_lot.get('lot_tags')),
+                
+                # Imagem
+                'image_url': image_url,
+                
+                # Status e flags
+                'lot_status_id': self._parse_int(scraped_lot.get('lot_status_id')),
+                'lot_is_judicial': bool(scraped_lot.get('lot_is_judicial', False)),
+                'lot_is_scrap': bool(scraped_lot.get('lot_is_scrap', False)),
+                'lot_financeable': bool(scraped_lot.get('lot_status_financeable', False)),
+                'is_highlight': bool(scraped_lot.get('is_highlight', False)),
+                'lot_test': bool(scraped_lot.get('lot_test', False)),
+                
+                # Campos judiciais
+                'lot_judicial_process': self._safe_str(scraped_lot.get('lot_judicial_process')),
+                'lot_judicial_action': self._safe_str(scraped_lot.get('lot_judicial_action')),
+                'lot_judicial_executor': self._safe_str(scraped_lot.get('lot_judicial_executor')),
+                'lot_judicial_executed': self._safe_str(scraped_lot.get('lot_judicial_executed')),
+                'lot_judicial_judge': self._safe_str(scraped_lot.get('lot_judicial_judge')),
+                'tj_praca_value': self._parse_numeric(scraped_lot.get('tj_praca_value')),
+                'tj_praca_discount': self._parse_numeric(scraped_lot.get('tj_praca_discount')),
+                
+                # Campos de imóveis
+                'lot_neighborhood': self._safe_str(scraped_lot.get('lot_neighborhood')),
+                'lot_street': self._safe_str(scraped_lot.get('lot_street')),
+                'lot_dormitories': self._parse_int(scraped_lot.get('lot_dormitories')),
+                'lot_useful_area': self._parse_numeric(scraped_lot.get('lot_useful_area')),
+                'lot_total_area': self._parse_numeric(scraped_lot.get('lot_total_area')),
+                'lot_suites': self._parse_int(scraped_lot.get('lot_suites')),
+                
+                # Campos de materiais
+                'lot_subcategory': self._safe_str(scraped_lot.get('lot_subcategory')),
+                'lot_type_name': self._safe_str(scraped_lot.get('lot_type_name')),
+                
+                # Metadata
+                'metadata': {k: v for k, v in metadata.items() if v is not None},
+                
+                # Timestamps
+                'updated_at': now,
+                'last_scraped_at': now,
             }
             
             return update
         
         except Exception as e:
             self.stats['errors'] += 1
+            print(f"⚠️ Erro ao criar update: {e}")
             return None
     
     def _insert_snapshots_batch(self, snapshots: List[Dict]):
@@ -495,13 +605,26 @@ class SodreMonitor:
                         .execute()
                     self.stats['items_updated'] += 1
                 except Exception as e:
-                    print(f"  ⚠️ Erro ao atualizar item {update.get('id', 'unknown')}: {e}")
+                    print(f"  ⚠️ Erro ao atualizar item {item_id}: {e}")
                     self.stats['errors'] += 1
             
             print(f"  ✅ {self.stats['items_updated']} itens atualizados")
         
         except Exception as e:
             print(f"❌ Erro ao atualizar itens: {e}")
+    
+    def _safe_str(self, value) -> str:
+        """
+        ✅ Converte para string de forma segura
+        Evita AttributeError quando value é None
+        """
+        if value is None:
+            return None
+        try:
+            result = str(value).strip()
+            return result if result else None
+        except:
+            return None
     
     def _parse_datetime(self, value) -> Optional[str]:
         """Parse de datetime"""
