@@ -187,6 +187,9 @@ class SodreMonitor:
                 print(f"\n📦 Processando: {section_name.upper()}")
                 
                 try:
+                    # ✅ Pequeno delay para garantir que interceptor está pronto
+                    await asyncio.sleep(1)
+                    
                     await page.goto(url, wait_until="networkidle", timeout=60000)
                     
                     # ✅ ESPERA AUMENTADA: 7 segundos
@@ -197,6 +200,16 @@ class SodreMonitor:
                     initial_capture = len(all_lots) - lots_before
                     if initial_capture > 0:
                         print(f"  ✅ Página 1: {initial_capture} lotes capturados")
+                    else:
+                        # ✅ Se não capturou nada, tenta recarregar
+                        print(f"  ⚠️  Nenhum lote na primeira tentativa, recarregando...")
+                        await asyncio.sleep(2)
+                        await page.reload(wait_until="networkidle")
+                        await asyncio.sleep(5)
+                        
+                        initial_capture = len(all_lots) - lots_before
+                        if initial_capture > 0:
+                            print(f"  ✅ Após reload: {initial_capture} lotes capturados")
                     
                     # Paginação
                     for page_num in range(2, 51):
@@ -205,7 +218,9 @@ class SodreMonitor:
                             await asyncio.sleep(2)
                             
                             button = page.locator('button[title="Avançar"]:not([disabled])').first
-                            if await button.count() > 0:
+                            button_count = await button.count()
+                            
+                            if button_count > 0:
                                 await button.click()
                                 print(f"  ➡️  Página {page_num}...")
                                 
@@ -215,7 +230,8 @@ class SodreMonitor:
                             else:
                                 print(f"  ✅ {page_num-1} páginas processadas")
                                 break
-                        except:
+                        except Exception as e:
+                            print(f"  ⚠️  Erro na paginação página {page_num}: {str(e)[:100]}")
                             break
                 
                 except Exception as e:
